@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+.streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+backups/
+*.log
+
+# Copias antiguas de desarrollo
+app_backup*.py
+main_backup.py
+services/*backup*.py
+
+# Informes y diagnósticos locales
+auditoria_robustez_resultado.txt
+diagnostico_visual.txt
+finscope_codigo_matematico_completo.txt
+
+# Datos personales/locales de usuario
+data/portfolio.json
+data/portfolio_transactions.json
+data/watchlist.json
