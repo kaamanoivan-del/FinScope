@@ -4430,41 +4430,13 @@ tema = "Claro"
 # ============================================================
 
 if pagina == "Cuenta":
-    st.markdown(
-        """
-        <div style="max-width:760px; padding-top:18px;">
-            <div style="
-                font-size:0.75rem;
-                letter-spacing:0.16em;
-                font-weight:700;
-                color:#6f8199;
-                margin-bottom:12px;
-            ">
-                FINSCOPE · CUENTA
-            </div>
-
-            <div style="
-                font-size:2.35rem;
-                line-height:1.08;
-                font-weight:750;
-                color:#14233b;
-                margin-bottom:10px;
-            ">
-                Tu cuenta FinScope
-            </div>
-
-            <div style="
-                color:#64748b;
-                font-size:1rem;
-                margin-bottom:28px;
-            ">
-                Guarda de forma privada tu Watchlist,
-                cartera y operaciones.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.caption("FINSCOPE · CUENTA")
+    st.title("Tu cuenta FinScope")
+    st.write(
+        "Guarda de forma privada tu Watchlist, "
+        "cartera y operaciones."
     )
+    st.markdown("---")
 
     if not _storage_supabase():
         st.info(
