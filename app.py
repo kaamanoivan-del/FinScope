@@ -1654,7 +1654,7 @@ st.markdown(
 
 <div class="fs-hero-copy">
 <h1>Analiza mejor.<br><em>Decide con más información.</em></h1>
-<p>Datos de mercado, fundamentales, valoración, riesgo y análisis cuantitativo en una sola plataforma.</p>
+<p>Analiza acciones y empresas con datos de mercado, fundamentales, valoración, rentabilidad, riesgo, carteras y herramientas de análisis cuantitativo en una sola plataforma.</p>
 </div>
 
 </div>
