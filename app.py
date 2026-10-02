@@ -4407,7 +4407,6 @@ st.sidebar.markdown(
     unsafe_allow_html=True
 )
 
-_mostrar_acceso_supabase()
 
 
 pagina = st.sidebar.radio(
@@ -4416,13 +4415,180 @@ pagina = st.sidebar.radio(
         "Analizar empresa",
         "Comparador",
         "Watchlist",
-        "Mi cartera"
+        "Mi cartera",
+        "Cuenta"
     ],
     label_visibility="collapsed"
 )
 
 # FinScope · modo claro permanente
 tema = "Claro"
+
+
+# ============================================================
+# FINSCOPE · CUENTA
+# ============================================================
+
+if pagina == "Cuenta":
+    st.markdown(
+        """
+        <div style="max-width:760px; padding-top:18px;">
+            <div style="
+                font-size:0.75rem;
+                letter-spacing:0.16em;
+                font-weight:700;
+                color:#6f8199;
+                margin-bottom:12px;
+            ">
+                FINSCOPE · CUENTA
+            </div>
+
+            <div style="
+                font-size:2.35rem;
+                line-height:1.08;
+                font-weight:750;
+                color:#14233b;
+                margin-bottom:10px;
+            ">
+                Tu cuenta FinScope
+            </div>
+
+            <div style="
+                color:#64748b;
+                font-size:1rem;
+                margin-bottom:28px;
+            ">
+                Guarda de forma privada tu Watchlist,
+                cartera y operaciones.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not _storage_supabase():
+        st.info(
+            "La cuenta FinScope está disponible "
+            "en la versión web."
+        )
+
+    elif _supabase_authenticated():
+        usuario = _supabase_user()
+        email = getattr(usuario, "email", None)
+
+        st.success("Sesión iniciada correctamente.")
+
+        if email:
+            st.write("**Email:**", email)
+
+        st.write(
+            "Tus datos personales de FinScope "
+            "están asociados a esta cuenta."
+        )
+
+        if st.button(
+            "Cerrar sesión",
+            key="finscope_account_logout",
+        ):
+            _supabase_logout()
+            st.rerun()
+
+    else:
+        tab_login, tab_signup = st.tabs(
+            ["Iniciar sesión", "Crear cuenta"]
+        )
+
+        with tab_login:
+            st.markdown("### Iniciar sesión")
+
+            login_email = st.text_input(
+                "Email",
+                key="finscope_page_login_email",
+            )
+
+            login_password = st.text_input(
+                "Contraseña",
+                type="password",
+                key="finscope_page_login_password",
+            )
+
+            if st.button(
+                "Iniciar sesión",
+                key="finscope_page_login_button",
+                type="primary",
+            ):
+                try:
+                    _supabase_login(
+                        login_email,
+                        login_password,
+                    )
+                    st.rerun()
+
+                except Exception:
+                    st.error(
+                        "No se pudo iniciar sesión. "
+                        "Comprueba el email y la contraseña."
+                    )
+
+        with tab_signup:
+            st.markdown("### Crear cuenta")
+
+            signup_email = st.text_input(
+                "Email",
+                key="finscope_page_signup_email",
+            )
+
+            signup_password = st.text_input(
+                "Contraseña",
+                type="password",
+                key="finscope_page_signup_password",
+            )
+
+            signup_password_2 = st.text_input(
+                "Repite la contraseña",
+                type="password",
+                key="finscope_page_signup_password_2",
+            )
+
+            if st.button(
+                "Crear cuenta",
+                key="finscope_page_signup_button",
+                type="primary",
+            ):
+                if len(signup_password) < 6:
+                    st.error(
+                        "La contraseña debe tener "
+                        "al menos 6 caracteres."
+                    )
+
+                elif signup_password != signup_password_2:
+                    st.error(
+                        "Las contraseñas no coinciden."
+                    )
+
+                else:
+                    try:
+                        respuesta = _supabase_signup(
+                            signup_email,
+                            signup_password,
+                        )
+
+                        if respuesta.session is None:
+                            st.success(
+                                "Cuenta creada. Revisa tu email "
+                                "para confirmarla y después "
+                                "inicia sesión."
+                            )
+                        else:
+                            st.rerun()
+
+                    except Exception:
+                        st.error(
+                            "No se pudo crear la cuenta. "
+                            "Comprueba los datos o utiliza "
+                            "otro email."
+                        )
+
 
 
 st.sidebar.markdown("---")
