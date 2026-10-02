@@ -5566,10 +5566,19 @@ elif pagina == "Watchlist":
                     guardar_watchlist(st.session_state.watchlist)
                     st.rerun()
 
-            except Exception:
+            except Exception as exc:
+                print(
+                    "WATCHLIST_DATA_ERROR",
+                    repr(simbolo),
+                    type(exc).__name__,
+                    repr(exc),
+                    flush=True,
+                )
+
                 st.warning(
                     f"No se han podido actualizar los datos "
-                    f"de {simbolo}."
+                    f"de {simbolo}. "
+                    "FinScope volverá a intentarlo automáticamente."
                 )
 
 
