@@ -4,6 +4,7 @@ import altair as alt
 import json
 import os
 from pathlib import Path
+from supabase import create_client
 from services.financial_data import (
     obtener_datos_empresa,
     obtener_historico,
@@ -106,21 +107,41 @@ PORTFOLIO_TRANSACTIONS_FILE = Path(
 
 # =====================================================================
 # FINSCOPE · CAPA DE ALMACENAMIENTO
-# local   -> persistencia JSON en este equipo
-# session -> almacenamiento privado por sesión para despliegue web
+# local    -> persistencia JSON en este equipo
+# session  -> almacenamiento temporal privado por sesión
+# supabase -> persistencia privada por usuario autenticado
 # =====================================================================
 
-FINSCOPE_STORAGE_MODE = os.environ.get(
+def _secret_or_env(nombre, default=""):
+    try:
+        valor = st.secrets.get(nombre, None)
+        if valor is not None:
+            return str(valor)
+    except Exception:
+        pass
+
+    return str(os.environ.get(nombre, default))
+
+
+FINSCOPE_STORAGE_MODE = _secret_or_env(
     "FINSCOPE_STORAGE_MODE",
     "local",
 ).strip().lower()
 
-if FINSCOPE_STORAGE_MODE not in {"local", "session"}:
+if FINSCOPE_STORAGE_MODE not in {
+    "local",
+    "session",
+    "supabase",
+}:
     FINSCOPE_STORAGE_MODE = "local"
 
 
 def _storage_session():
     return FINSCOPE_STORAGE_MODE == "session"
+
+
+def _storage_supabase():
+    return FINSCOPE_STORAGE_MODE == "supabase"
 
 
 def _session_get(key):
@@ -132,11 +153,251 @@ def _session_set(key, valor):
     st.session_state[key] = list(valor)
 
 
+def _supabase_config():
+    url = _secret_or_env("SUPABASE_URL").strip()
+    key = _secret_or_env("SUPABASE_KEY").strip()
+    return url, key
+
+
+def _supabase_client():
+    if not _storage_supabase():
+        return None
+
+    cliente = st.session_state.get("_finscope_supabase_client")
+
+    if cliente is not None:
+        return cliente
+
+    url, key = _supabase_config()
+
+    if not url or not key:
+        return None
+
+    cliente = create_client(url, key)
+    st.session_state["_finscope_supabase_client"] = cliente
+    return cliente
+
+
+def _supabase_user():
+    usuario = st.session_state.get("_finscope_user")
+    return usuario
+
+
+def _supabase_user_id():
+    usuario = _supabase_user()
+
+    if usuario is None:
+        return None
+
+    return str(usuario.id)
+
+
+def _supabase_authenticated():
+    return _supabase_user_id() is not None
+
+
+def _supabase_login(email, password):
+    cliente = _supabase_client()
+
+    if cliente is None:
+        raise RuntimeError(
+            "Supabase no está configurado correctamente."
+        )
+
+    respuesta = cliente.auth.sign_in_with_password({
+        "email": email.strip(),
+        "password": password,
+    })
+
+    usuario = respuesta.user
+
+    if usuario is None:
+        raise RuntimeError(
+            "No se pudo iniciar sesión."
+        )
+
+    st.session_state["_finscope_user"] = usuario
+    return usuario
+
+
+def _supabase_signup(email, password):
+    cliente = _supabase_client()
+
+    if cliente is None:
+        raise RuntimeError(
+            "Supabase no está configurado correctamente."
+        )
+
+    respuesta = cliente.auth.sign_up({
+        "email": email.strip(),
+        "password": password,
+    })
+
+    usuario = respuesta.user
+
+    if usuario is None:
+        raise RuntimeError(
+            "No se pudo crear la cuenta."
+        )
+
+    if respuesta.session is not None:
+        st.session_state["_finscope_user"] = usuario
+
+    return respuesta
+
+
+def _supabase_logout():
+    cliente = _supabase_client()
+
+    if cliente is not None:
+        try:
+            cliente.auth.sign_out()
+        except Exception:
+            pass
+
+    st.session_state.pop("_finscope_user", None)
+    st.session_state.pop("_finscope_supabase_client", None)
+
+
+def _supabase_select_data(tabla):
+    cliente = _supabase_client()
+    user_id = _supabase_user_id()
+
+    if cliente is None or user_id is None:
+        return []
+
+    respuesta = (
+        cliente.table(tabla)
+        .select("data")
+        .eq("user_id", user_id)
+        .order("id")
+        .execute()
+    )
+
+    salida = []
+
+    for fila in respuesta.data or []:
+        dato = fila.get("data")
+
+        if isinstance(dato, dict):
+            salida.append(dato)
+
+    return salida
+
+
+def _mostrar_acceso_supabase():
+    if not _storage_supabase():
+        return
+
+    st.sidebar.markdown("---")
+
+    if _supabase_authenticated():
+        usuario = _supabase_user()
+        email = getattr(usuario, "email", None)
+
+        st.sidebar.caption(
+            "Sesión iniciada"
+            + (f" · {email}" if email else "")
+        )
+
+        if st.sidebar.button(
+            "Cerrar sesión",
+            key="finscope_logout",
+            use_container_width=True,
+        ):
+            _supabase_logout()
+            st.rerun()
+
+        return
+
+    st.sidebar.markdown("##### Cuenta FinScope")
+    st.sidebar.caption(
+        "Inicia sesión para guardar tu Watchlist y cartera."
+    )
+
+    modo = st.sidebar.radio(
+        "Acceso",
+        ["Iniciar sesión", "Crear cuenta"],
+        horizontal=True,
+        key="finscope_auth_mode",
+        label_visibility="collapsed",
+    )
+
+    email = st.sidebar.text_input(
+        "Email",
+        key="finscope_auth_email",
+    )
+
+    password = st.sidebar.text_input(
+        "Contraseña",
+        type="password",
+        key="finscope_auth_password",
+    )
+
+    if modo == "Iniciar sesión":
+        if st.sidebar.button(
+            "Iniciar sesión",
+            key="finscope_login",
+            use_container_width=True,
+        ):
+            try:
+                _supabase_login(email, password)
+                st.rerun()
+            except Exception as exc:
+                st.sidebar.error(
+                    "No se pudo iniciar sesión. "
+                    "Comprueba el email y la contraseña."
+                )
+
+    else:
+        if st.sidebar.button(
+            "Crear cuenta",
+            key="finscope_signup",
+            use_container_width=True,
+        ):
+            if len(password) < 6:
+                st.sidebar.error(
+                    "La contraseña debe tener al menos 6 caracteres."
+                )
+            else:
+                try:
+                    respuesta = _supabase_signup(
+                        email,
+                        password,
+                    )
+
+                    if respuesta.session is None:
+                        st.sidebar.success(
+                            "Cuenta creada. Revisa tu email para "
+                            "confirmarla y después inicia sesión."
+                        )
+                    else:
+                        st.rerun()
+
+                except Exception:
+                    st.sidebar.error(
+                        "No se pudo crear la cuenta. "
+                        "Comprueba los datos o prueba con otro email."
+                    )
+
+
+def _requiere_cuenta():
+    return (
+        _storage_supabase()
+        and not _supabase_authenticated()
+    )
 
 
 def cargar_operaciones_cartera():
+    if _storage_supabase():
+        return _supabase_select_data(
+            "portfolio_transactions"
+        )
+
     if _storage_session():
-        return _session_get("finscope_portfolio_transactions")
+        return _session_get(
+            "finscope_portfolio_transactions"
+        )
 
     try:
         if not PORTFOLIO_TRANSACTIONS_FILE.exists():
@@ -182,15 +443,9 @@ def cargar_operaciones_cartera():
             salida.append({
                 "id": str(
                     op.get("id")
-                    or (
-                        ticker
-                        + "_"
-                        + str(len(salida))
-                    )
+                    or ticker + "_" + str(len(salida))
                 ),
-                "fecha": str(
-                    op.get("fecha") or ""
-                ),
+                "fecha": str(op.get("fecha") or ""),
                 "ticker": ticker,
                 "nombre": str(
                     op.get("nombre") or ticker
@@ -209,7 +464,72 @@ def cargar_operaciones_cartera():
         return []
 
 
+
 def guardar_operaciones_cartera(operaciones):
+    if _storage_supabase():
+        cliente = _supabase_client()
+        user_id = _supabase_user_id()
+
+        if cliente is None or user_id is None:
+            return
+
+        (
+            cliente.table("portfolio_transactions")
+            .delete()
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        filas = []
+
+        for op in operaciones:
+            try:
+                cantidad = float(op.get("cantidad"))
+                precio = float(op.get("precio_eur"))
+            except (TypeError, ValueError):
+                continue
+
+            ticker = str(
+                op.get("ticker") or ""
+            ).strip().upper()
+
+            operacion = str(
+                op.get("operacion") or ""
+            ).strip().upper()
+
+            fecha = str(op.get("fecha") or "").strip()
+
+            if (
+                not ticker
+                or operacion not in {"COMPRA", "VENTA"}
+                or cantidad <= 0
+                or precio <= 0
+            ):
+                continue
+
+            fila = {
+                "user_id": user_id,
+                "ticker": ticker,
+                "operation_type": operacion,
+                "quantity": cantidad,
+                "price": precio,
+                "data": op,
+            }
+
+            if fecha and fecha != "Migración V2":
+                fila["operation_date"] = fecha
+
+            filas.append(fila)
+
+        if filas:
+            (
+                cliente.table("portfolio_transactions")
+                .insert(filas)
+                .execute()
+            )
+
+        return
+
     if _storage_session():
         _session_set(
             "finscope_portfolio_transactions",
@@ -235,9 +555,8 @@ def guardar_operaciones_cartera(operaciones):
         encoding="utf-8",
     )
 
-    temporal.replace(
-        PORTFOLIO_TRANSACTIONS_FILE
-    )
+    temporal.replace(PORTFOLIO_TRANSACTIONS_FILE)
+
 
 
 def registrar_operacion_cartera(
@@ -445,29 +764,32 @@ def sincronizar_cartera_desde_operaciones():
 
 
 def migrar_cartera_v2_a_operaciones():
-    if _storage_session():
+    if _storage_supabase():
+        if not _supabase_authenticated():
+            return False
+
         if cargar_operaciones_cartera():
             return False
+
+    elif _storage_session():
+        if cargar_operaciones_cartera():
+            return False
+
     elif PORTFOLIO_TRANSACTIONS_FILE.exists():
         return False
 
     cartera = cargar_cartera_personal()
-
     operaciones = []
 
     for posicion in cartera:
-        precio = posicion.get(
-            "precio_medio_eur"
-        )
+        precio = posicion.get("precio_medio_eur")
 
         if precio is None:
             continue
 
         try:
             precio = float(precio)
-            cantidad = float(
-                posicion["cantidad"]
-            )
+            cantidad = float(posicion["cantidad"])
         except (TypeError, ValueError):
             continue
 
@@ -475,39 +797,25 @@ def migrar_cartera_v2_a_operaciones():
             continue
 
         operaciones.append({
-            "id":
-                "MIGRACION_"
-                + posicion["ticker"],
-
-            "fecha":
-                "Migración V2",
-
-            "ticker":
-                posicion["ticker"],
-
-            "nombre":
+            "id": "MIGRACION_" + posicion["ticker"],
+            "fecha": "Migración V2",
+            "ticker": posicion["ticker"],
+            "nombre": (
                 posicion.get("nombre")
-                or posicion["ticker"],
-
-            "tipo":
+                or posicion["ticker"]
+            ),
+            "tipo": (
                 posicion.get("tipo")
-                or "Activo",
-
-            "operacion":
-                "COMPRA",
-
-            "cantidad":
-                cantidad,
-
-            "precio_eur":
-                precio,
+                or "Activo"
+            ),
+            "operacion": "COMPRA",
+            "cantidad": cantidad,
+            "precio_eur": precio,
         })
 
-    guardar_operaciones_cartera(
-        operaciones
-    )
-
+    guardar_operaciones_cartera(operaciones)
     return True
+
 
 
 def calcular_pl_realizado_total():
@@ -530,9 +838,12 @@ def cargar_cartera_personal():
     """
     Carga posiciones reales.
 
-    V2 añade precio_medio_eur. Las posiciones antiguas de V1
-    siguen siendo compatibles y tendrán precio medio pendiente.
+    En Supabase cada usuario accede únicamente a sus
+    propias posiciones mediante RLS.
     """
+    if _storage_supabase():
+        return _supabase_select_data("portfolio")
+
     if _storage_session():
         return _session_get("finscope_portfolio")
 
@@ -604,14 +915,81 @@ def cargar_cartera_personal():
     return []
 
 
+
 def guardar_cartera_personal(cartera):
+    if _storage_supabase():
+        cliente = _supabase_client()
+        user_id = _supabase_user_id()
+
+        if cliente is None or user_id is None:
+            return
+
+        (
+            cliente.table("portfolio")
+            .delete()
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        filas = []
+
+        for posicion in cartera:
+            try:
+                cantidad = float(
+                    posicion.get("cantidad")
+                )
+            except (TypeError, ValueError):
+                continue
+
+            ticker = str(
+                posicion.get("ticker") or ""
+            ).strip().upper()
+
+            if not ticker or cantidad <= 0:
+                continue
+
+            precio = posicion.get(
+                "precio_medio_eur"
+            )
+
+            try:
+                precio = (
+                    float(precio)
+                    if precio is not None
+                    else 0.0
+                )
+            except (TypeError, ValueError):
+                precio = 0.0
+
+            filas.append({
+                "user_id": user_id,
+                "ticker": ticker,
+                "quantity": cantidad,
+                "average_price": precio,
+                "data": posicion,
+            })
+
+        if filas:
+            (
+                cliente.table("portfolio")
+                .insert(filas)
+                .execute()
+            )
+
+        return
+
     if _storage_session():
         _session_set("finscope_portfolio", cartera)
         return
 
-    PORTFOLIO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PORTFOLIO_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    temporal = PORTFOLIO_FILE.with_suffix(".json.tmp")
+    temporal = PORTFOLIO_FILE.with_suffix(
+        ".json.tmp"
+    )
 
     with open(temporal, "w", encoding="utf-8") as f:
         json.dump(
@@ -622,6 +1000,7 @@ def guardar_cartera_personal(cartera):
         )
 
     temporal.replace(PORTFOLIO_FILE)
+
 
 
 def resolver_activo_cartera(consulta):
@@ -822,6 +1201,9 @@ def construir_resumen_cartera_personal(cartera):
 
 
 def cargar_watchlist():
+    if _storage_supabase():
+        return _supabase_select_data("watchlist")
+
     if _storage_session():
         return _session_get("finscope_watchlist")
 
@@ -830,7 +1212,7 @@ def cargar_watchlist():
             with open(
                 WATCHLIST_FILE,
                 "r",
-                encoding="utf-8"
+                encoding="utf-8",
             ) as f:
                 datos = json.load(f)
 
@@ -843,27 +1225,68 @@ def cargar_watchlist():
     return []
 
 
+
 def guardar_watchlist(watchlist):
+    if _storage_supabase():
+        cliente = _supabase_client()
+        user_id = _supabase_user_id()
+
+        if cliente is None or user_id is None:
+            return
+
+        (
+            cliente.table("watchlist")
+            .delete()
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        filas = []
+
+        for activo in watchlist:
+            ticker = str(
+                activo.get("ticker") or ""
+            ).strip().upper()
+
+            if not ticker:
+                continue
+
+            filas.append({
+                "user_id": user_id,
+                "ticker": ticker,
+                "data": activo,
+            })
+
+        if filas:
+            (
+                cliente.table("watchlist")
+                .insert(filas)
+                .execute()
+            )
+
+        return
+
     if _storage_session():
         _session_set("finscope_watchlist", watchlist)
         return
 
     WATCHLIST_FILE.parent.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
     )
 
     with open(
         WATCHLIST_FILE,
         "w",
-        encoding="utf-8"
+        encoding="utf-8",
     ) as f:
         json.dump(
             watchlist,
             f,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         )
+
 
 
 
@@ -3983,6 +4406,9 @@ st.sidebar.markdown(
     '<div class="sidebar-label">NAVEGACIÓN</div>',
     unsafe_allow_html=True
 )
+
+_mostrar_acceso_supabase()
+
 
 pagina = st.sidebar.radio(
     "Navegación",
