@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 import json
+import os
 from pathlib import Path
 from services.financial_data import (
     obtener_datos_empresa,
@@ -103,7 +104,40 @@ PORTFOLIO_TRANSACTIONS_FILE = Path(
 )
 
 
+# =====================================================================
+# FINSCOPE · CAPA DE ALMACENAMIENTO
+# local   -> persistencia JSON en este equipo
+# session -> almacenamiento privado por sesión para despliegue web
+# =====================================================================
+
+FINSCOPE_STORAGE_MODE = os.environ.get(
+    "FINSCOPE_STORAGE_MODE",
+    "local",
+).strip().lower()
+
+if FINSCOPE_STORAGE_MODE not in {"local", "session"}:
+    FINSCOPE_STORAGE_MODE = "local"
+
+
+def _storage_session():
+    return FINSCOPE_STORAGE_MODE == "session"
+
+
+def _session_get(key):
+    valor = st.session_state.get(key, [])
+    return list(valor) if isinstance(valor, list) else []
+
+
+def _session_set(key, valor):
+    st.session_state[key] = list(valor)
+
+
+
+
 def cargar_operaciones_cartera():
+    if _storage_session():
+        return _session_get("finscope_portfolio_transactions")
+
     try:
         if not PORTFOLIO_TRANSACTIONS_FILE.exists():
             return []
@@ -176,6 +210,13 @@ def cargar_operaciones_cartera():
 
 
 def guardar_operaciones_cartera(operaciones):
+    if _storage_session():
+        _session_set(
+            "finscope_portfolio_transactions",
+            operaciones,
+        )
+        return
+
     PORTFOLIO_TRANSACTIONS_FILE.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -404,7 +445,10 @@ def sincronizar_cartera_desde_operaciones():
 
 
 def migrar_cartera_v2_a_operaciones():
-    if PORTFOLIO_TRANSACTIONS_FILE.exists():
+    if _storage_session():
+        if cargar_operaciones_cartera():
+            return False
+    elif PORTFOLIO_TRANSACTIONS_FILE.exists():
         return False
 
     cartera = cargar_cartera_personal()
@@ -489,6 +533,9 @@ def cargar_cartera_personal():
     V2 añade precio_medio_eur. Las posiciones antiguas de V1
     siguen siendo compatibles y tendrán precio medio pendiente.
     """
+    if _storage_session():
+        return _session_get("finscope_portfolio")
+
     try:
         if PORTFOLIO_FILE.exists():
             with open(
@@ -558,6 +605,10 @@ def cargar_cartera_personal():
 
 
 def guardar_cartera_personal(cartera):
+    if _storage_session():
+        _session_set("finscope_portfolio", cartera)
+        return
+
     PORTFOLIO_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     temporal = PORTFOLIO_FILE.with_suffix(".json.tmp")
@@ -771,6 +822,9 @@ def construir_resumen_cartera_personal(cartera):
 
 
 def cargar_watchlist():
+    if _storage_session():
+        return _session_get("finscope_watchlist")
+
     try:
         if WATCHLIST_FILE.exists():
             with open(
@@ -790,6 +844,10 @@ def cargar_watchlist():
 
 
 def guardar_watchlist(watchlist):
+    if _storage_session():
+        _session_set("finscope_watchlist", watchlist)
+        return
+
     WATCHLIST_FILE.parent.mkdir(
         parents=True,
         exist_ok=True
