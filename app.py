@@ -497,7 +497,9 @@ def guardar_operaciones_cartera(operaciones):
                 op.get("operacion") or ""
             ).strip().upper()
 
-            fecha = str(op.get("fecha") or "").strip()
+            fecha = str(
+                op.get("fecha") or ""
+            ).strip()
 
             if (
                 not ticker
@@ -507,17 +509,23 @@ def guardar_operaciones_cartera(operaciones):
             ):
                 continue
 
+            # operation_date es NOT NULL en Supabase.
+            # Las antiguas operaciones migradas reciben una
+            # fecha válida en lugar de omitir la columna.
+            if not fecha or fecha == "Migración V2":
+                fecha_db = datetime.now().isoformat()
+            else:
+                fecha_db = fecha
+
             fila = {
                 "user_id": user_id,
                 "ticker": ticker,
                 "operation_type": operacion,
                 "quantity": cantidad,
                 "price": precio,
+                "operation_date": fecha_db,
                 "data": op,
             }
-
-            if fecha and fecha != "Migración V2":
-                fila["operation_date"] = fecha
 
             filas.append(fila)
 
@@ -556,7 +564,6 @@ def guardar_operaciones_cartera(operaciones):
     )
 
     temporal.replace(PORTFOLIO_TRANSACTIONS_FILE)
-
 
 
 def registrar_operacion_cartera(
@@ -1202,10 +1209,42 @@ def construir_resumen_cartera_personal(cartera):
 
 def cargar_watchlist():
     if _storage_supabase():
-        return _supabase_select_data("watchlist")
+        datos = _supabase_select_data("watchlist")
+        salida = []
+
+        for activo in datos:
+            if isinstance(activo, str):
+                ticker = activo.strip().upper()
+            elif isinstance(activo, dict):
+                ticker = str(
+                    activo.get("ticker") or ""
+                ).strip().upper()
+            else:
+                continue
+
+            if ticker and ticker not in salida:
+                salida.append(ticker)
+
+        return salida
 
     if _storage_session():
-        return _session_get("finscope_watchlist")
+        datos = _session_get("finscope_watchlist")
+        salida = []
+
+        for activo in datos:
+            if isinstance(activo, str):
+                ticker = activo.strip().upper()
+            elif isinstance(activo, dict):
+                ticker = str(
+                    activo.get("ticker") or ""
+                ).strip().upper()
+            else:
+                continue
+
+            if ticker and ticker not in salida:
+                salida.append(ticker)
+
+        return salida
 
     try:
         if WATCHLIST_FILE.exists():
@@ -1217,7 +1256,22 @@ def cargar_watchlist():
                 datos = json.load(f)
 
             if isinstance(datos, list):
-                return datos
+                salida = []
+
+                for activo in datos:
+                    if isinstance(activo, str):
+                        ticker = activo.strip().upper()
+                    elif isinstance(activo, dict):
+                        ticker = str(
+                            activo.get("ticker") or ""
+                        ).strip().upper()
+                    else:
+                        continue
+
+                    if ticker and ticker not in salida:
+                        salida.append(ticker)
+
+                return salida
 
     except Exception:
         pass
@@ -1225,8 +1279,22 @@ def cargar_watchlist():
     return []
 
 
-
 def guardar_watchlist(watchlist):
+    tickers = []
+
+    for activo in watchlist:
+        if isinstance(activo, str):
+            ticker = activo.strip().upper()
+        elif isinstance(activo, dict):
+            ticker = str(
+                activo.get("ticker") or ""
+            ).strip().upper()
+        else:
+            continue
+
+        if ticker and ticker not in tickers:
+            tickers.append(ticker)
+
     if _storage_supabase():
         cliente = _supabase_client()
         user_id = _supabase_user_id()
@@ -1241,21 +1309,14 @@ def guardar_watchlist(watchlist):
             .execute()
         )
 
-        filas = []
-
-        for activo in watchlist:
-            ticker = str(
-                activo.get("ticker") or ""
-            ).strip().upper()
-
-            if not ticker:
-                continue
-
-            filas.append({
+        filas = [
+            {
                 "user_id": user_id,
                 "ticker": ticker,
-                "data": activo,
-            })
+                "data": {"ticker": ticker},
+            }
+            for ticker in tickers
+        ]
 
         if filas:
             (
@@ -1267,7 +1328,7 @@ def guardar_watchlist(watchlist):
         return
 
     if _storage_session():
-        _session_set("finscope_watchlist", watchlist)
+        _session_set("finscope_watchlist", tickers)
         return
 
     WATCHLIST_FILE.parent.mkdir(
@@ -1281,15 +1342,11 @@ def guardar_watchlist(watchlist):
         encoding="utf-8",
     ) as f:
         json.dump(
-            watchlist,
+            tickers,
             f,
             ensure_ascii=False,
             indent=2,
         )
-
-
-
-
 
 
 def resolver_busqueda_empresa(
