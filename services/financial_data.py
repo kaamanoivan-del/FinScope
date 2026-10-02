@@ -1041,6 +1041,25 @@ def obtener_datos_empresa(ticker):
         except Exception:
             identidad_fallback = {}
 
+    # Metadatos de identidad disponibles mediante el buscador.
+    #
+    # En Streamlit Cloud Yahoo puede bloquear `.info` aunque el
+    # buscador siga respondiendo correctamente. Estos campos solo
+    # actúan como respaldo: nunca sustituyen un dato válido de `.info`.
+    sector_fallback = (
+        identidad_fallback.get("sector")
+        or identidad_fallback.get("sectorDisp")
+    )
+    industria_fallback = (
+        identidad_fallback.get("industria")
+        or identidad_fallback.get("industry")
+        or identidad_fallback.get("industryDisp")
+    )
+    pais_fallback = (
+        identidad_fallback.get("pais")
+        or identidad_fallback.get("country")
+    )
+
     # Mercado de respaldo mediante fast_info.
     fast_fallback = {}
     try:
@@ -1403,11 +1422,18 @@ def obtener_datos_empresa(ticker):
             "earningsGrowth"
         ] = crecimiento_beneficios_fb
 
+    # Registramos qué campos han tenido que ser completados por el
+    # fallback antes de mezclarlos con `.info`. Esto evita confundir
+    # posteriormente un dato de Yahoo `.info` con uno calculado por
+    # FinScope a partir de estados trimestrales.
+    claves_completadas_por_fallback = set()
+
     # `.info` sigue siendo la fuente preferida. El respaldo únicamente
     # completa claves ausentes o nulas.
     for clave, valor in fundamentales_fallback.items():
         if info.get(clave) is None and valor is not None:
             info[clave] = valor
+            claves_completadas_por_fallback.add(clave)
 
     # ---------------------------------------------------------
     # PERIODOS Y FCF VERIFICABLE
@@ -1430,7 +1456,8 @@ def obtener_datos_empresa(ticker):
         trimestre_mas_reciente_timestamp
     )
 
-    es_financiera = info.get("sector") == "Financial Services"
+    sector_efectivo = info.get("sector") or sector_fallback
+    es_financiera = sector_efectivo == "Financial Services"
 
     free_cash_flow_ttm = None
     free_cash_flow_ttm_periodos = []
@@ -1496,7 +1523,7 @@ def obtener_datos_empresa(ticker):
         "fecha_total_assets": None,
     }
 
-    if info.get("sector") == "Financial Services":
+    if es_financiera:
 
         def ultimo_valor_valido(df, fila):
             """
@@ -1643,9 +1670,9 @@ def obtener_datos_empresa(ticker):
         # Identificación
         "nombre": info.get("longName") or identidad_fallback.get("nombre") or ticker,
         "ticker": ticker,
-        "sector": info.get("sector"),
-        "industria": info.get("industry"),
-        "pais": info.get("country"),
+        "sector": info.get("sector") or sector_fallback,
+        "industria": info.get("industry") or industria_fallback,
+        "pais": info.get("country") or pais_fallback,
         "moneda": info.get("currency") or fast_fallback.get("currency"),
 
         # Clasificación para adaptar posteriormente el análisis.
@@ -1716,16 +1743,12 @@ def obtener_datos_empresa(ticker):
         ),
         "periodo_crecimiento_ingresos": (
             "TTM interanual calculado desde 8 trimestres"
-            if "revenueGrowth" in fundamentales_fallback
-            and fundamentales_fallback.get("revenueGrowth") is not None
-            and info.get("revenueGrowth") == fundamentales_fallback.get("revenueGrowth")
+            if "revenueGrowth" in claves_completadas_por_fallback
             else "Periodo definido por la fuente"
         ),
         "periodo_crecimiento_beneficios": (
             "TTM interanual calculado desde 8 trimestres"
-            if "earningsGrowth" in fundamentales_fallback
-            and fundamentales_fallback.get("earningsGrowth") is not None
-            and info.get("earningsGrowth") == fundamentales_fallback.get("earningsGrowth")
+            if "earningsGrowth" in claves_completadas_por_fallback
             else "Periodo definido por la fuente"
         ),
 
