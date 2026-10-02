@@ -1064,6 +1064,352 @@ def obtener_datos_empresa(ticker):
         fast_fallback = {}
 
     # ---------------------------------------------------------
+    # FUNDAMENTALES DE RESPALDO PARA ENTORNOS CLOUD
+    # ---------------------------------------------------------
+    #
+    # Yahoo puede bloquear `.info` en determinados servidores.
+    # En ese caso FinScope intenta reconstruir únicamente métricas
+    # verificables a partir de los estados financieros publicados
+    # por Yahoo Finance. No se estiman valores ausentes.
+    #
+    # Este bloque también completa campos concretos que falten en
+    # `.info`, aunque el resto de `.info` sí esté disponible.
+
+    fundamentales_fallback = {}
+
+    def _numero_finito(valor):
+        try:
+            import math
+            numero = float(valor)
+            return numero if math.isfinite(numero) else None
+        except Exception:
+            return None
+
+    def _fila_reciente(df, nombres):
+        if df is None or getattr(df, "empty", True):
+            return None
+
+        for nombre in nombres:
+            if nombre not in df.index:
+                continue
+
+            try:
+                serie = df.loc[nombre]
+            except Exception:
+                continue
+
+            try:
+                for valor in serie:
+                    numero = _numero_finito(valor)
+                    if numero is not None:
+                        return numero
+            except Exception:
+                numero = _numero_finito(serie)
+                if numero is not None:
+                    return numero
+
+        return None
+
+    def _suma_ultimos_cuatro(df, nombres):
+        if df is None or getattr(df, "empty", True):
+            return None
+
+        for nombre in nombres:
+            if nombre not in df.index:
+                continue
+
+            try:
+                serie = df.loc[nombre].dropna().head(4)
+            except Exception:
+                continue
+
+            if len(serie) != 4:
+                continue
+
+            valores = [_numero_finito(v) for v in serie]
+
+            if all(v is not None for v in valores):
+                return sum(valores)
+
+        return None
+
+    try:
+        income_q = empresa.quarterly_income_stmt
+    except Exception:
+        income_q = None
+
+    try:
+        balance_q = empresa.quarterly_balance_sheet
+    except Exception:
+        balance_q = None
+
+    try:
+        cashflow_q = empresa.quarterly_cashflow
+    except Exception:
+        cashflow_q = None
+
+    # TTM: solo se calcula cuando existen exactamente cuatro
+    # observaciones trimestrales válidas.
+    ingresos_ttm_fb = _suma_ultimos_cuatro(
+        income_q,
+        ["Total Revenue", "Operating Revenue"],
+    )
+
+    beneficio_ttm_fb = _suma_ultimos_cuatro(
+        income_q,
+        [
+            "Net Income Common Stockholders",
+            "Net Income",
+        ],
+    )
+
+    ebitda_ttm_fb = _suma_ultimos_cuatro(
+        income_q,
+        ["EBITDA", "Normalized EBITDA"],
+    )
+
+    beneficio_operativo_ttm_fb = _suma_ultimos_cuatro(
+        income_q,
+        ["Operating Income"],
+    )
+
+    beneficio_bruto_ttm_fb = _suma_ultimos_cuatro(
+        income_q,
+        ["Gross Profit"],
+    )
+
+    flujo_operativo_ttm_fb = _suma_ultimos_cuatro(
+        cashflow_q,
+        [
+            "Operating Cash Flow",
+            "Total Cash From Operating Activities",
+        ],
+    )
+
+    deuda_fb = _fila_reciente(
+        balance_q,
+        ["Total Debt"],
+    )
+
+    efectivo_fb = _fila_reciente(
+        balance_q,
+        [
+            "Cash Cash Equivalents And Short Term Investments",
+            "Cash And Cash Equivalents",
+            "Cash",
+        ],
+    )
+
+    patrimonio_fb = _fila_reciente(
+        balance_q,
+        [
+            "Stockholders Equity",
+            "Common Stock Equity",
+            "Total Stockholder Equity",
+        ],
+    )
+
+    activos_fb = _fila_reciente(
+        balance_q,
+        ["Total Assets"],
+    )
+
+    pasivo_corriente_fb = _fila_reciente(
+        balance_q,
+        ["Current Liabilities", "Total Current Liabilities"],
+    )
+
+    activo_corriente_fb = _fila_reciente(
+        balance_q,
+        ["Current Assets", "Total Current Assets"],
+    )
+
+    acciones_fb = _fila_reciente(
+        balance_q,
+        [
+            "Ordinary Shares Number",
+            "Share Issued",
+        ],
+    )
+
+    precio_fb = (
+        _numero_finito(info.get("currentPrice"))
+        or _numero_finito(fast_fallback.get("last_price"))
+    )
+
+    capitalizacion_fb = (
+        _numero_finito(info.get("marketCap"))
+        or _numero_finito(fast_fallback.get("market_cap"))
+    )
+
+    if ingresos_ttm_fb is not None:
+        fundamentales_fallback["totalRevenue"] = ingresos_ttm_fb
+
+    if beneficio_ttm_fb is not None:
+        fundamentales_fallback["netIncomeToCommon"] = beneficio_ttm_fb
+
+    if ebitda_ttm_fb is not None:
+        fundamentales_fallback["ebitda"] = ebitda_ttm_fb
+
+    if deuda_fb is not None:
+        fundamentales_fallback["totalDebt"] = deuda_fb
+
+    if efectivo_fb is not None:
+        fundamentales_fallback["totalCash"] = efectivo_fb
+
+    if (
+        activo_corriente_fb is not None
+        and pasivo_corriente_fb is not None
+        and pasivo_corriente_fb != 0
+    ):
+        fundamentales_fallback["currentRatio"] = (
+            activo_corriente_fb / pasivo_corriente_fb
+        )
+
+    if (
+        ingresos_ttm_fb is not None
+        and ingresos_ttm_fb != 0
+    ):
+        if beneficio_bruto_ttm_fb is not None:
+            fundamentales_fallback["grossMargins"] = (
+                beneficio_bruto_ttm_fb / ingresos_ttm_fb
+            )
+
+        if beneficio_operativo_ttm_fb is not None:
+            fundamentales_fallback["operatingMargins"] = (
+                beneficio_operativo_ttm_fb / ingresos_ttm_fb
+            )
+
+        if beneficio_ttm_fb is not None:
+            fundamentales_fallback["profitMargins"] = (
+                beneficio_ttm_fb / ingresos_ttm_fb
+            )
+
+    if (
+        beneficio_ttm_fb is not None
+        and patrimonio_fb is not None
+        and patrimonio_fb != 0
+    ):
+        fundamentales_fallback["returnOnEquity"] = (
+            beneficio_ttm_fb / patrimonio_fb
+        )
+
+    if (
+        beneficio_ttm_fb is not None
+        and activos_fb is not None
+        and activos_fb != 0
+    ):
+        fundamentales_fallback["returnOnAssets"] = (
+            beneficio_ttm_fb / activos_fb
+        )
+
+    eps_fb = None
+
+    if (
+        beneficio_ttm_fb is not None
+        and acciones_fb is not None
+        and acciones_fb > 0
+    ):
+        eps_fb = beneficio_ttm_fb / acciones_fb
+        fundamentales_fallback["trailingEps"] = eps_fb
+
+    if (
+        precio_fb is not None
+        and eps_fb is not None
+        and eps_fb > 0
+    ):
+        fundamentales_fallback["trailingPE"] = (
+            precio_fb / eps_fb
+        )
+
+    if (
+        capitalizacion_fb is not None
+        and patrimonio_fb is not None
+        and patrimonio_fb > 0
+    ):
+        fundamentales_fallback["priceToBook"] = (
+            capitalizacion_fb / patrimonio_fb
+        )
+
+    if (
+        deuda_fb is not None
+        and patrimonio_fb is not None
+        and patrimonio_fb != 0
+    ):
+        # Yahoo expresa debtToEquity habitualmente como porcentaje.
+        fundamentales_fallback["debtToEquity"] = (
+            deuda_fb / patrimonio_fb * 100.0
+        )
+
+    if flujo_operativo_ttm_fb is not None:
+        fundamentales_fallback[
+            "operatingCashflow"
+        ] = flujo_operativo_ttm_fb
+
+    # Crecimiento interanual TTM: cuatro trimestres actuales frente
+    # a los cuatro inmediatamente anteriores. Solo se publica cuando
+    # existen ocho trimestres válidos.
+    def _crecimiento_ttm(df, nombres):
+        if df is None or getattr(df, "empty", True):
+            return None
+
+        for nombre in nombres:
+            if nombre not in df.index:
+                continue
+
+            try:
+                serie = df.loc[nombre].dropna().head(8)
+            except Exception:
+                continue
+
+            if len(serie) != 8:
+                continue
+
+            valores = [_numero_finito(v) for v in serie]
+
+            if not all(v is not None for v in valores):
+                continue
+
+            actual = sum(valores[:4])
+            anterior = sum(valores[4:8])
+
+            if anterior == 0:
+                return None
+
+            return (actual / anterior) - 1.0
+
+        return None
+
+    crecimiento_ingresos_fb = _crecimiento_ttm(
+        income_q,
+        ["Total Revenue", "Operating Revenue"],
+    )
+
+    crecimiento_beneficios_fb = _crecimiento_ttm(
+        income_q,
+        [
+            "Net Income Common Stockholders",
+            "Net Income",
+        ],
+    )
+
+    if crecimiento_ingresos_fb is not None:
+        fundamentales_fallback[
+            "revenueGrowth"
+        ] = crecimiento_ingresos_fb
+
+    if crecimiento_beneficios_fb is not None:
+        fundamentales_fallback[
+            "earningsGrowth"
+        ] = crecimiento_beneficios_fb
+
+    # `.info` sigue siendo la fuente preferida. El respaldo únicamente
+    # completa claves ausentes o nulas.
+    for clave, valor in fundamentales_fallback.items():
+        if info.get(clave) is None and valor is not None:
+            info[clave] = valor
+
+    # ---------------------------------------------------------
     # PERIODOS Y FCF VERIFICABLE
     # ---------------------------------------------------------
     # totalRevenue, netIncomeToCommon y EBITDA se mantienen como
@@ -1300,7 +1646,7 @@ def obtener_datos_empresa(ticker):
         "sector": info.get("sector"),
         "industria": info.get("industry"),
         "pais": info.get("country"),
-        "moneda": info.get("currency"),
+        "moneda": info.get("currency") or fast_fallback.get("currency"),
 
         # Clasificación para adaptar posteriormente el análisis.
         # No cambia los datos financieros: únicamente identifica
@@ -1368,8 +1714,20 @@ def obtener_datos_empresa(ticker):
             if free_cash_flow_ttm is not None
             else None
         ),
-        "periodo_crecimiento_ingresos": "Periodo definido por la fuente",
-        "periodo_crecimiento_beneficios": "Periodo definido por la fuente",
+        "periodo_crecimiento_ingresos": (
+            "TTM interanual calculado desde 8 trimestres"
+            if "revenueGrowth" in fundamentales_fallback
+            and fundamentales_fallback.get("revenueGrowth") is not None
+            and info.get("revenueGrowth") == fundamentales_fallback.get("revenueGrowth")
+            else "Periodo definido por la fuente"
+        ),
+        "periodo_crecimiento_beneficios": (
+            "TTM interanual calculado desde 8 trimestres"
+            if "earningsGrowth" in fundamentales_fallback
+            and fundamentales_fallback.get("earningsGrowth") is not None
+            and info.get("earningsGrowth") == fundamentales_fallback.get("earningsGrowth")
+            else "Periodo definido por la fuente"
+        ),
 
         # Balance
         "deuda_total": info.get("totalDebt"),
