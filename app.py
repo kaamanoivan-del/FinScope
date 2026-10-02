@@ -1591,7 +1591,7 @@ def formato_numero(valor, tipo="numero"):
 
 
 st.set_page_config(
-    page_title="FinScope",
+    page_title="FinScope | Análisis financiero, acciones y carteras",
     page_icon="📈",
     layout="wide"
 )
