@@ -43,7 +43,31 @@ from services.investment_analysis import calcular_cartera_quant
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cache_obtener_datos_empresa(ticker):
-    return obtener_datos_empresa(ticker)
+    """
+    Datos fundamentales con caché corta.
+
+    Esta versión invalida la caché anterior de Streamlit
+    y evita conservar respuestas sin identidad válida.
+    """
+    datos = obtener_datos_empresa(ticker)
+
+    if not isinstance(datos, dict):
+        raise ValueError("Respuesta financiera inválida")
+
+    ticker_dato = str(
+        datos.get("ticker") or ""
+    ).strip().upper()
+
+    nombre = str(
+        datos.get("nombre") or ""
+    ).strip()
+
+    if not ticker_dato or not nombre:
+        raise ValueError(
+            "Datos incompletos para " + str(ticker)
+        )
+
+    return datos
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
