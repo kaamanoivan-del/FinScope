@@ -1015,7 +1015,53 @@ def obtener_datos_empresa(ticker):
     ticker = ticker.upper().strip()
 
     empresa = yf.Ticker(ticker)
-    info = empresa.info
+
+    # Yahoo Finance puede bloquear parcialmente `.info` en algunos
+    # entornos cloud (401 / Invalid Crumb). Ese fallo no debe convertir
+    # un ticker válido en un activo inexistente.
+    try:
+        info = empresa.info
+        if not isinstance(info, dict):
+            info = {}
+    except Exception:
+        info = {}
+
+    # Identidad de respaldo mediante el buscador.
+    identidad_fallback = {}
+    if not info.get("longName"):
+        try:
+            candidatos = buscar_empresas(ticker, max_resultados=6)
+            identidad_fallback = next(
+                (
+                    item for item in candidatos
+                    if str(item.get("ticker") or "").strip().upper() == ticker
+                ),
+                {},
+            )
+        except Exception:
+            identidad_fallback = {}
+
+    # Mercado de respaldo mediante fast_info.
+    fast_fallback = {}
+    try:
+        fast = empresa.fast_info
+
+        def _fast(nombre):
+            try:
+                valor = getattr(fast, nombre, None)
+                return valor() if callable(valor) else valor
+            except Exception:
+                return None
+
+        fast_fallback = {
+            "last_price": _fast("last_price"),
+            "market_cap": _fast("market_cap"),
+            "year_high": _fast("year_high"),
+            "year_low": _fast("year_low"),
+            "currency": _fast("currency"),
+        }
+    except Exception:
+        fast_fallback = {}
 
     # ---------------------------------------------------------
     # PERIODOS Y FCF VERIFICABLE
@@ -1249,7 +1295,7 @@ def obtener_datos_empresa(ticker):
 
     datos = {
         # Identificación
-        "nombre": info.get("longName"),
+        "nombre": info.get("longName") or identidad_fallback.get("nombre") or ticker,
         "ticker": ticker,
         "sector": info.get("sector"),
         "industria": info.get("industry"),
@@ -1262,10 +1308,10 @@ def obtener_datos_empresa(ticker):
         "es_financiera": es_financiera,
 
         # Mercado
-        "precio": info.get("currentPrice"),
-        "capitalizacion": info.get("marketCap"),
-        "maximo_52_semanas": info.get("fiftyTwoWeekHigh"),
-        "minimo_52_semanas": info.get("fiftyTwoWeekLow"),
+        "precio": info.get("currentPrice") or fast_fallback.get("last_price"),
+        "capitalizacion": info.get("marketCap") or fast_fallback.get("market_cap"),
+        "maximo_52_semanas": info.get("fiftyTwoWeekHigh") or fast_fallback.get("year_high"),
+        "minimo_52_semanas": info.get("fiftyTwoWeekLow") or fast_fallback.get("year_low"),
 
         # Cuenta de resultados
         "ingresos": info.get("totalRevenue"),
@@ -1370,7 +1416,7 @@ def obtener_datos_empresa(ticker):
     # múltiplos y tasas permanecen sin cambios.
 
     moneda_original = _normalizar_moneda_finscope(
-        info.get("currency")
+        info.get("currency") or fast_fallback.get("currency")
     )
 
     datos["moneda_original"] = moneda_original

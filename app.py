@@ -62,10 +62,15 @@ def cache_obtener_datos_empresa(ticker):
         datos.get("nombre") or ""
     ).strip()
 
-    if not ticker_dato or not nombre:
+    # En producción Yahoo puede limitar parcialmente `.info`.
+    # No descartamos un activo válido únicamente por faltar el nombre.
+    if not ticker_dato:
         raise ValueError(
-            "Datos incompletos para " + str(ticker)
+            "Ticker inválido para " + str(ticker)
         )
+
+    if not nombre:
+        datos["nombre"] = ticker_dato
 
     return datos
 
