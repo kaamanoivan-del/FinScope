@@ -1040,32 +1040,115 @@ def guardar_cartera_personal(cartera):
 
 
 def resolver_activo_cartera(consulta):
+    """
+    Resuelve una búsqueda multiactivo priorizando instrumentos
+    de referencia inequívocos antes del ranking general.
+    """
+
     consulta = str(consulta or "").strip()
 
     if not consulta:
         return None
 
+    def normalizar(texto):
+        texto = str(texto or "").casefold()
+
+        reemplazos = {
+            "&": " and ",
+            "á": "a",
+            "é": "e",
+            "í": "i",
+            "ó": "o",
+            "ú": "u",
+            "ü": "u",
+            "ñ": "n",
+            "-": " ",
+            "_": " ",
+            "/": " ",
+            ".": " ",
+        }
+
+        for origen, destino in reemplazos.items():
+            texto = texto.replace(origen, destino)
+
+        return " ".join(texto.split())
+
+    consulta_norm = normalizar(consulta)
+    consulta_upper = consulta.upper()
+
+    aliases = {
+        "s&p 500": "^GSPC",
+        "s&p500": "^GSPC",
+        "sp 500": "^GSPC",
+        "sp500": "^GSPC",
+        "s and p 500": "^GSPC",
+        "s and p500": "^GSPC",
+
+        "nasdaq 100": "^NDX",
+        "nasdaq100": "^NDX",
+
+        "msci world": "^990100-USD-STRD",
+
+        "bitcoin": "BTC-USD",
+        "btc": "BTC-USD",
+
+        "ethereum": "ETH-USD",
+        "ether": "ETH-USD",
+        "eth": "ETH-USD",
+
+        "gold": "GC=F",
+        "oro": "GC=F",
+
+        "silver": "SI=F",
+        "plata": "SI=F",
+    }
+
+    ticker_preferido = aliases.get(
+        consulta_norm
+    )
+
     resultados = buscar_activos(
         consulta,
-        max_resultados=8,
+        max_resultados=12,
     )
 
     if not resultados:
         return None
 
-    consulta_upper = consulta.upper()
+    # 1. Alias inequívoco de FinScope.
+    if ticker_preferido:
+        preferido = next(
+            (
+                activo
+                for activo in resultados
+                if str(
+                    activo.get("ticker") or ""
+                ).upper()
+                == ticker_preferido.upper()
+            ),
+            None,
+        )
 
+        if preferido:
+            return preferido
+
+    # 2. Ticker exacto introducido por el usuario.
     exacto = next(
         (
             activo
             for activo in resultados
-            if str(activo.get("ticker") or "").upper()
-            == consulta_upper
+            if str(
+                activo.get("ticker") or ""
+            ).upper() == consulta_upper
         ),
         None,
     )
 
-    return exacto or resultados[0]
+    if exacto:
+        return exacto
+
+    # 3. Mejor resultado del ranking universal.
+    return resultados[0]
 
 
 def obtener_cotizacion_cartera_eur(ticker):
@@ -5377,201 +5460,473 @@ elif pagina == "Watchlist":
 
     st.markdown(
         '<div class="section-kicker">SEGUIMIENTO</div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
     st.title("Watchlist")
 
     st.markdown(
         '<p class="analysis-caption">'
-        'Sigue tus empresas y consulta rápidamente '
-        'sus principales métricas.'
+        'Sigue empresas, ETF, índices y criptomonedas '
+        'desde un único lugar.'
         '</p>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
+    )
+
+    st.caption(
+        "Las métricas mostradas se adaptan al tipo de activo. "
+        "Los precios corresponden al último dato disponible."
     )
 
     if "watchlist" not in st.session_state:
         st.session_state.watchlist = cargar_watchlist()
 
+    # ---------------------------------------------------------
+    # BUSCADOR UNIVERSAL
+    # ---------------------------------------------------------
+
     consulta_watchlist = st.text_input(
-        "Añadir empresa",
-        placeholder="Apple, Inditex, AAPL...",
-        key="watchlist_input"
+        "Añadir activo",
+        placeholder=(
+            "NVIDIA, Bitcoin, S&P 500, "
+            "MSCI World, EIMI..."
+        ),
+        key="watchlist_input",
     ).strip()
 
-    nuevo_ticker = ""
+    nuevo_activo = None
 
     if consulta_watchlist:
-        with st.spinner("Buscando empresa..."):
-            nuevo_ticker = resolver_busqueda_empresa(
-                consulta_watchlist,
-                "watchlist_resultado_busqueda",
+
+        with st.spinner("Buscando activo..."):
+            nuevo_activo = resolver_activo_cartera(
+                consulta_watchlist
             )
 
-        if not nuevo_ticker:
+        if nuevo_activo:
+
+            ticker_nuevo = str(
+                nuevo_activo.get("ticker") or ""
+            ).upper()
+
+            nombre_nuevo = (
+                nuevo_activo.get("nombre")
+                or ticker_nuevo
+            )
+
+            tipo_nuevo = (
+                nuevo_activo.get("tipo_nombre")
+                or nuevo_activo.get("tipo")
+                or "Activo"
+            )
+
+            st.info(
+                f"Seleccionado: {nombre_nuevo} · "
+                f"{ticker_nuevo} · {tipo_nuevo}"
+            )
+
+        else:
             st.warning(
-                "No se ha encontrado una empresa "
+                "No se ha encontrado un activo "
                 "con esa búsqueda."
             )
 
+    # ---------------------------------------------------------
+    # AÑADIR
+    # ---------------------------------------------------------
+
     if st.button(
         "Añadir a Watchlist",
-        width="stretch"
+        width="stretch",
     ):
 
         if not consulta_watchlist:
+
             st.warning(
-                "Introduce el nombre de una empresa "
-                "o un ticker."
+                "Introduce el nombre o ticker de un activo."
             )
 
-        elif not nuevo_ticker:
+        elif not nuevo_activo:
+
             st.error(
-                "No se ha podido encontrar esa empresa."
+                "No se ha podido encontrar ese activo."
             )
-
-        elif nuevo_ticker in st.session_state.watchlist:
-            st.info("La empresa ya está en tu Watchlist.")
 
         else:
-            try:
-                empresa_nueva = cache_obtener_datos_empresa(
+
+            nuevo_ticker = str(
+                nuevo_activo.get("ticker") or ""
+            ).upper()
+
+            watchlist_normalizada = [
+                str(x).upper()
+                for x in st.session_state.watchlist
+            ]
+
+            if nuevo_ticker in watchlist_normalizada:
+
+                st.info(
+                    "Este activo ya está en tu Watchlist."
+                )
+
+            else:
+
+                st.session_state.watchlist.append(
                     nuevo_ticker
                 )
 
-                if empresa_nueva:
-                    st.session_state.watchlist.append(
-                        nuevo_ticker
-                    )
-                    guardar_watchlist(
-                        st.session_state.watchlist
-                    )
-                    st.rerun()
-                else:
-                    st.error(
-                        "No se ha podido encontrar esa empresa."
-                    )
-
-            except Exception:
-                st.error(
-                    "No se ha podido encontrar esa empresa."
+                guardar_watchlist(
+                    st.session_state.watchlist
                 )
+
+                st.rerun()
+
+    # ---------------------------------------------------------
+    # WATCHLIST
+    # ---------------------------------------------------------
 
     if not st.session_state.watchlist:
 
         st.info(
             "Tu Watchlist está vacía. "
-            "Añade una empresa para empezar."
+            "Añade un activo para empezar."
         )
 
     else:
 
         st.caption(
             f"{len(st.session_state.watchlist)} "
-            "empresas en seguimiento"
+            "activos en seguimiento"
         )
 
-        for simbolo in list(st.session_state.watchlist):
+        for simbolo in list(
+            st.session_state.watchlist
+        ):
+
+            simbolo = str(simbolo).upper()
 
             try:
-                empresa = cache_obtener_datos_empresa(simbolo)
+
+                # ---------------------------------------------
+                # IDENTIDAD DEL ACTIVO
+                # ---------------------------------------------
+
+                resultados_identidad = buscar_activos(
+                    simbolo,
+                    max_resultados=8,
+                )
+
+                activo = next(
+                    (
+                        resultado
+                        for resultado
+                        in resultados_identidad
+                        if str(
+                            resultado.get("ticker") or ""
+                        ).upper() == simbolo
+                    ),
+                    None,
+                )
+
+                if activo is None:
+
+                    activo = {
+                        "ticker": simbolo,
+                        "nombre": simbolo,
+                        "tipo": "ACTIVO",
+                        "tipo_nombre": "Activo",
+                        "exchange": "",
+                    }
+
+                ticker = str(
+                    activo.get("ticker")
+                    or simbolo
+                ).upper()
+
+                nombre = (
+                    activo.get("nombre")
+                    or ticker
+                )
+
+                tipo_codigo = str(
+                    activo.get("tipo")
+                    or "ACTIVO"
+                ).upper()
+
+                tipo_nombre = (
+                    activo.get("tipo_nombre")
+                    or "Activo"
+                )
+
+                exchange = str(
+                    activo.get("exchange")
+                    or ""
+                )
 
                 st.divider()
 
                 st.markdown(
-                    f"### {empresa['nombre']} · "
-                    f"{empresa['ticker']}"
+                    f"### {nombre} · {ticker}"
                 )
 
-                st.caption(
-                    f"{empresa.get('sector') or 'Sector no disponible'}"
-                    " · "
-                    f"{empresa.get('industria') or 'Industria no disponible'}"
-                )
+                descripcion = tipo_nombre
 
-                c1, c2, c3, c4 = st.columns(4)
+                if exchange:
+                    descripcion += f" · {exchange}"
 
-                c1.metric(
-                    "Precio",
-                    formato_numero(empresa.get("precio"))
-                )
+                st.caption(descripcion)
 
-                c2.metric(
-                    "Capitalización",
-                    formato_numero(
-                        empresa.get("capitalizacion"),
-                        "billones"
-                    )
-                )
+                # =============================================
+                # EMPRESAS
+                # =============================================
 
-                c3.metric(
-                    "PER",
-                    formato_numero(
-                        empresa.get("per"),
-                        "multiplo"
-                    )
-                )
+                if tipo_codigo == "EMPRESA":
 
-                c4.metric(
-                    "Crec. ingresos",
-                    formato_numero(
-                        empresa.get("crecimiento_ingresos"),
-                        "porcentaje"
-                    )
-                )
-
-                c1, c2, c3 = st.columns(3)
-
-                c1.metric(
-                    "ROE",
-                    formato_numero(
-                        empresa.get("roe"),
-                        "porcentaje"
-                    )
-                )
-
-                c2.metric(
-                    "Price / Book",
-                    formato_numero(
-                        empresa.get("price_to_book"),
-                        "multiplo"
-                    )
-                )
-
-                if empresa.get("es_financiera"):
-
-                    c3.metric(
-                        "Activos",
-                        formato_numero(
-                            empresa.get("total_assets"),
-                            "billones"
+                    empresa = (
+                        cache_obtener_datos_empresa(
+                            ticker
                         )
                     )
 
                     st.caption(
-                        "Entidad financiera · FinScope utiliza "
-                        "métricas adaptadas al negocio bancario."
+                        f"{empresa.get('sector') or 'Sector no disponible'}"
+                        " · "
+                        f"{empresa.get('industria') or 'Industria no disponible'}"
                     )
+
+                    c1, c2, c3, c4 = st.columns(4)
+
+                    c1.metric(
+                        "Precio",
+                        formato_numero(
+                            empresa.get("precio")
+                        ),
+                    )
+
+                    c2.metric(
+                        "Capitalización",
+                        formato_numero(
+                            empresa.get(
+                                "capitalizacion"
+                            ),
+                            "billones",
+                        ),
+                    )
+
+                    c3.metric(
+                        "PER",
+                        formato_numero(
+                            empresa.get("per"),
+                            "multiplo",
+                        ),
+                    )
+
+                    c4.metric(
+                        "Crec. ingresos",
+                        formato_numero(
+                            empresa.get(
+                                "crecimiento_ingresos"
+                            ),
+                            "porcentaje",
+                        ),
+                    )
+
+                    c1, c2, c3 = st.columns(3)
+
+                    c1.metric(
+                        "ROE",
+                        formato_numero(
+                            empresa.get("roe"),
+                            "porcentaje",
+                        ),
+                    )
+
+                    c2.metric(
+                        "Price / Book",
+                        formato_numero(
+                            empresa.get(
+                                "price_to_book"
+                            ),
+                            "multiplo",
+                        ),
+                    )
+
+                    if empresa.get("es_financiera"):
+
+                        c3.metric(
+                            "Activos",
+                            formato_numero(
+                                empresa.get(
+                                    "total_assets"
+                                ),
+                                "billones",
+                            ),
+                        )
+
+                        st.caption(
+                            "Entidad financiera · "
+                            "FinScope utiliza métricas "
+                            "adaptadas al negocio bancario."
+                        )
+
+                    else:
+
+                        c3.metric(
+                            "Margen operativo",
+                            formato_numero(
+                                empresa.get(
+                                    "margen_operativo"
+                                ),
+                                "porcentaje",
+                            ),
+                        )
+
+                # =============================================
+                # ETF / ÍNDICE / CRIPTO / OTROS
+                # =============================================
 
                 else:
 
-                    c3.metric(
-                        "Margen operativo",
-                        formato_numero(
-                            empresa.get("margen_operativo"),
-                            "porcentaje"
+                    cotizacion = (
+                        obtener_cotizacion_cartera_eur(
+                            ticker
                         )
                     )
 
+                    precio_actual = None
+
+                    if cotizacion:
+                        precio_actual = (
+                            cotizacion.get(
+                                "precio_eur"
+                            )
+                        )
+
+                    serie = (
+                        cache_obtener_serie_rendimiento(
+                            ticker,
+                            "1mo",
+                        )
+                    )
+
+                    variacion = None
+
+                    if (
+                        serie is not None
+                        and not serie.empty
+                    ):
+
+                        if "Close" in serie.columns:
+                            precios = serie["Close"]
+
+                        elif "Adj Close" in serie.columns:
+                            precios = serie["Adj Close"]
+
+                        else:
+                            precios = None
+
+                        if precios is not None:
+
+                            precios = pd.to_numeric(
+                                precios,
+                                errors="coerce",
+                            ).dropna()
+
+                            if len(precios) >= 2:
+
+                                primero = float(
+                                    precios.iloc[0]
+                                )
+
+                                ultimo = float(
+                                    precios.iloc[-1]
+                                )
+
+                                if primero != 0:
+                                    variacion = (
+                                        ultimo / primero
+                                        - 1.0
+                                    )
+
+                    c1, c2, c3 = st.columns(3)
+
+                    c1.metric(
+                        "Precio",
+                        (
+                            f"{precio_actual:,.2f} €"
+                            if precio_actual is not None
+                            else "—"
+                        ),
+                    )
+
+                    c2.metric(
+                        "Variación 1 mes",
+                        (
+                            f"{variacion * 100:.2f}%"
+                            if variacion is not None
+                            else "—"
+                        ),
+                    )
+
+                    c3.metric(
+                        "Tipo",
+                        tipo_nombre,
+                    )
+
+                    if tipo_codigo == "INDICE":
+
+                        st.caption(
+                            "Índice de referencia · "
+                            "No se muestran PER, ROE ni "
+                            "otras métricas empresariales."
+                        )
+
+                    elif tipo_codigo == "ETF":
+
+                        st.caption(
+                            "ETF · FinScope muestra métricas "
+                            "de mercado y evita aplicar "
+                            "fundamentales propios de empresas."
+                        )
+
+                    elif tipo_codigo == "CRIPTOMONEDA":
+
+                        st.caption(
+                            "Criptomoneda · FinScope muestra "
+                            "métricas de mercado. "
+                            "Los ratios empresariales no son "
+                            "aplicables."
+                        )
+
+                    else:
+
+                        st.caption(
+                            "Activo de mercado · "
+                            "Se muestran únicamente métricas "
+                            "compatibles con este instrumento."
+                        )
+
+                # ---------------------------------------------
+                # ELIMINAR
+                # ---------------------------------------------
+
                 if st.button(
-                    f"Eliminar {empresa['ticker']}",
-                    key=f"eliminar_{simbolo}"
+                    f"Eliminar {ticker}",
+                    key=f"eliminar_{ticker}",
                 ):
-                    st.session_state.watchlist.remove(simbolo)
-                    guardar_watchlist(st.session_state.watchlist)
+
+                    st.session_state.watchlist.remove(
+                        simbolo
+                    )
+
+                    guardar_watchlist(
+                        st.session_state.watchlist
+                    )
+
                     st.rerun()
 
             except Exception as exc:
+
                 print(
                     "WATCHLIST_DATA_ERROR",
                     repr(simbolo),
@@ -5581,11 +5936,11 @@ elif pagina == "Watchlist":
                 )
 
                 st.warning(
-                    f"No se han podido actualizar los datos "
-                    f"de {simbolo}. "
-                    "FinScope volverá a intentarlo automáticamente."
+                    f"No se han podido actualizar "
+                    f"los datos de {simbolo}. "
+                    "FinScope volverá a intentarlo "
+                    "automáticamente."
                 )
-
 
 
 if pagina == "Mi cartera":
